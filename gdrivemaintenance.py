@@ -78,7 +78,7 @@ def modify_permissions(api_client, file_resource, collaborators, disable_links, 
 
     # Delete unwanted permissions as specified by the requested state
     for perm in permissions:
-        if perm["id"] == "anyoneWithLink":
+        if perm["type"] in ["anyone", "domain"]:
             # Check that link disabling is requested
             if not disable_links:
                 return

@@ -119,7 +119,7 @@ class GoogleDriveOperations(object):
         permissions = []
 
         perm_request = self._service.permissions().list(fileId=file_resource["id"],
-                                                        fields="permissions(id,emailAddress,role)",
+                                                        fields="permissions(id,type,emailAddress,role)",
                                                         supportsAllDrives=self._is_teamdrive)
 
         for permission in google_pager(perm_request, "permissions", self._service.permissions().list_next):
@@ -198,7 +198,7 @@ class GoogleDriveOperations(object):
         :param batch: Object to add the deletion to. Otherwise execute deletion immediately.
         :return: None
         """
-        shared_link = perm["id"] == "anyoneWithLink"
+        shared_link = (perm["type"] in ["anyone", "domain"])
         file_name = file_resource["name"]
 
         # Setup action message
