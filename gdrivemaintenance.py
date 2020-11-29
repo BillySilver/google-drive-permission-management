@@ -2,6 +2,7 @@
 
 import sys
 import argparse
+import re, json
 from GoogleDriveOperations import GoogleDriveOperations, google_pager, EnhancedBatchHttpRequest
 import googleapiclient.errors
 
@@ -52,10 +53,30 @@ def argument_parsing():
     return args
 
 
+def perm_edit_err_logger(exception):
+    err_log = json.loads(exception.content)["error"]
+    if err_log["code"] == 404 and err_log["message"].find("Permission not found") >= 0:
+        # Tried to delete a non-existed permission (most likely has be deleted).
+        return
+
+    m = re.search(perm_edit_err_logger.re_uri_perm, exception.uri)
+    fileId = m.group(1)
+    permissionId = m.group(2)
+    with open("perm_edit_err.log", "a") as f:
+        if permissionId is not None:
+            print("del %s %s" % (fileId, permissionId[1: ]), file=f)
+        else:
+            print("add %s" % (fileId), file=f)
+
+perm_edit_err_logger.re_uri_perm = \
+    r"https://www.googleapis.com/drive/v3/files/([^/]+)/permissions(/\d+|/anyoneWithLink)?"
+
+
 def perm_edit_callback(id, response, exception):
     if exception is not None:
         print("Batch execution callback failed:", file=sys.stderr)
         print(exception, file=sys.stderr)
+        perm_edit_err_logger(exception)
 
 
 def td_disable_links(api_client, file_resource, what_if, permissions=None, batch=None):
