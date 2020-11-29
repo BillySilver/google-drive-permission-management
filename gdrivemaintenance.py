@@ -37,6 +37,8 @@ def argument_parsing():
     parser.add_argument("--version", "-v", action="version", version="%(prog)s {0}".format(version))
     parser.add_argument("--teamdrive", "-td", metavar="teamdrive_id", type=str, default=None,
                         help="Team Drive ID (disable-links only).")
+    parser.add_argument("--files-only", action="store_true", default=False,
+                        help="Ignore any folders, only check and update permissions on files.")
 
     args = parser.parse_args()
 
@@ -133,45 +135,58 @@ def main():
 
     # Call the Drive v3 API to get all files for processing
     print("Fixing owners and sharing permissions in files and folders...")
-    if not ops.is_teamdrive:
-        file_request = ops.service.files().list(pageSize=1000, q=ops.subfolder_filter,
-                                                fields="nextPageToken," + GoogleDriveOperations.STD_FIELDS_LIST)
-    else:
-        file_request = ops.service.files().list(pageSize=1000, q=ops.subfolder_filter,
-                                                supportsAllDrives=True,
-                                                includeItemsFromAllDrives=True,
-                                                corpora="drive",
-                                                driveId=ops.td_id,
-                                                fields="nextPageToken," + GoogleDriveOperations.STD_FIELDS_LIST)
 
     # Batch all the permission changes, since they don't have dependencies
     perm_batch = EnhancedBatchHttpRequest(ops.service, callback=perm_edit_callback)
 
-    for drive_obj in google_pager(file_request, "files", ops.service.files().list_next):
-        # Fix ownership if desired, then fix permissions
-        try:
-            if args.take_ownership and not ops.is_owner(drive_obj):
-                drive_obj = ops.take_ownership(drive_obj, args.what_if)
+    subfolder_ids = list(ops.subfolder_ids)
+    n_folder_batch = 10
+    for i in range(0, len(subfolder_ids), n_folder_batch):
+        # Send a request for every 'n_folder_batch' folders.
+        subfolder_ids_batch = subfolder_ids[i:i+n_folder_batch]
+        print("** %d-%d of %d folders **" % (i+1, i+len(subfolder_ids_batch), len(subfolder_ids)))
+        subfolder_filter = "mimeType != 'application/vnd.google-apps.folder' and " if args.files_only else ""
+        if len(subfolder_ids) > 1:
+            subfolder_filter += "('" + "' in parents or '".join(subfolder_ids_batch) + "' in parents)"
+        else:
+            subfolder_filter = "('%s' in parents)" % subfolder_ids_batch[0]
 
-            if drive_obj is not None:   # None is possible when "What-If" is requested
+        if not ops.is_teamdrive:
+            file_request = ops.service.files().list(pageSize=1000, q=subfolder_filter,
+                                                    fields="nextPageToken," + GoogleDriveOperations.STD_FIELDS_LIST)
+        else:
+            file_request = ops.service.files().list(pageSize=1000, q=subfolder_filter,
+                                                    supportsAllDrives=True,
+                                                    includeItemsFromAllDrives=True,
+                                                    corpora="drive",
+                                                    driveId=ops.td_id,
+                                                    fields="nextPageToken," + GoogleDriveOperations.STD_FIELDS_LIST)
 
-                # If the ownership changes are not requested, add the owner to the allowed collaborators list
-                if not ops.is_teamdrive:
-                    aug_collaborators = set(args.collaborators)
-                    if not args.take_ownership:
-                        aug_collaborators.add(ops.get_owner_email(drive_obj))
-                else:
-                    aug_collaborators = set()
+        for drive_obj in google_pager(file_request, "files", ops.service.files().list_next):
+            # Fix ownership if desired, then fix permissions
+            try:
+                if args.take_ownership and not ops.is_owner(drive_obj):
+                    drive_obj = ops.take_ownership(drive_obj, args.what_if)
 
-                modify_permissions(ops,
-                                   drive_obj,
-                                   aug_collaborators,
-                                   args.disable_links,
-                                   args.what_if,
-                                   batch=perm_batch)
-        except googleapiclient.errors.HttpError as err:
-            print("Error modifying state for '{0}', skipping...".format(drive_obj["name"]), file=sys.stderr)
-            print(err, file=sys.stderr)
+                if drive_obj is not None:   # None is possible when "What-If" is requested
+
+                    # If the ownership changes are not requested, add the owner to the allowed collaborators list
+                    if not ops.is_teamdrive:
+                        aug_collaborators = set(args.collaborators)
+                        if not args.take_ownership:
+                            aug_collaborators.add(ops.get_owner_email(drive_obj))
+                    else:
+                        aug_collaborators = set()
+
+                    modify_permissions(ops,
+                                       drive_obj,
+                                       aug_collaborators,
+                                       args.disable_links,
+                                       args.what_if,
+                                       batch=perm_batch)
+            except googleapiclient.errors.HttpError as err:
+                print("Error modifying state for '{0}', skipping...".format(drive_obj["name"]), file=sys.stderr)
+                print(err, file=sys.stderr)
 
     # Execute all permission changes
     perm_batch.execute()

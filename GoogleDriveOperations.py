@@ -88,11 +88,10 @@ class GoogleDriveOperations(object):
         self._is_teamdrive = (td_id is not None)
         temp_user_info = self._service.about().get(fields="user(emailAddress, permissionId)").execute().get("user")
         self._userinfo = namedtuple("UserInfo", temp_user_info.keys())(*temp_user_info.values())
-        self._subfolder_ids, self._subfolder_filter = self.enumerate_subfolder_ids(folder)
+        self._subfolder_ids = self.enumerate_subfolder_ids(folder)
 
         # Setup publicly-available variables
         self.subfolder_ids = self._subfolder_ids
-        self.subfolder_filter = self._subfolder_filter
         self.userinfo = self._userinfo
         self.service = self._service
         self.td_id = td_id
@@ -314,6 +313,8 @@ class GoogleDriveOperations(object):
         :return: Subfolder IDs (set), string for filtering Google Drive results to folder or subfolders.
         """
         print("Scanning folders...")
+        from time import time
+        sec_bgn = time()
 
         # Find the ID of the top-level folder, and then collect all subfolder IDs
         try:
@@ -339,11 +340,9 @@ class GoogleDriveOperations(object):
 
         folder_ids_set = self._collect_all_subfolders(top_id)
         folder_ids_set.add(top_id)
-        folder_ids = ["'{0}'".format(f_id) for f_id in folder_ids_set]
-        folder_filter = " in parents or ".join(folder_ids) + " in parents"
 
-        print("Finished scanning folders.")
-        return folder_ids_set, folder_filter
+        print("Finished scanning folders in %d seconds." % (time()-sec_bgn))
+        return folder_ids_set
 
     def _collect_all_subfolders(self, top_folder_id):
         """Gathers all the IDs of the subfolders in a specified top-level folder.
