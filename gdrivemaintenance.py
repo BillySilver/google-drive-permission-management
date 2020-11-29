@@ -58,6 +58,17 @@ def perm_edit_callback(id, response, exception):
         print(exception, file=sys.stderr)
 
 
+def td_disable_links(api_client, file_resource, what_if, permissions=None, batch=None):
+    if permissions is None:
+        permissions = api_client.get_permissions(file_resource)
+    for perm in permissions:
+        if perm["type"] in ["anyone", "domain"]:
+            api_client.delete_permission(file_resource,
+                                         perm,
+                                         what_if,
+                                         batch)
+
+
 def modify_permissions(api_client, file_resource, collaborators, disable_links, what_if, permissions=None, batch=None):
     """Edits permissions on a file owned by the executor to match the 'collaborators' preference.
 
@@ -70,6 +81,12 @@ def modify_permissions(api_client, file_resource, collaborators, disable_links, 
     :param batch: Object to use for batching permission edits, if provided.
     :return: None
     """
+    if api_client.is_teamdrive:
+        # Check that link disabling is requested
+        if not disable_links:
+            return
+        return td_disable_links(api_client, file_resource, what_if, permissions, batch)
+
     batch_internal = api_client.service.new_batch_http_request(perm_edit_callback)  # Batch at the file level or higher
 
     # If permissions aren't already supplied, retrieve them
@@ -87,18 +104,11 @@ def modify_permissions(api_client, file_resource, collaborators, disable_links, 
                                          perm,
                                          what_if,
                                          batch if batch is not None else batch_internal)
-        elif api_client.is_teamdrive:
-            continue
         elif perm["emailAddress"] not in collaborators:
             api_client.delete_permission(file_resource,
                                          perm,
                                          what_if,
                                          batch if batch is not None else batch_internal)
-
-    if api_client.is_teamdrive:
-        if batch is None:
-            batch_internal.execute()
-        return
 
     # Add wanted permissions as specified by requested state
     wanted_collaborators = collaborators
