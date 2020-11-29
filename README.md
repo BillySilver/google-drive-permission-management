@@ -36,7 +36,7 @@ python gdrivemaintenance.py "WE Bots" -c webots@eng.uwo.ca -t
 ```bash
 usage: gdrivemaintenance.py [-h] [--collaborators email [email ...]]
                             [--take-ownership] [--disable-links] [--what-if]
-                            [--version]
+                            [--version] [--teamdrive teamdrive_id]
                             [folder]
 
 Update sharing and ownership permissions on Google Drive files/folders to
@@ -53,7 +53,9 @@ optional arguments:
                         files/folders. If blank, removes all collaborators.
   --take-ownership, -t  should files/folders have their ownership changed
   --disable-links, -l   Disable all sharing by links
-  --what-if             shows what would happen, without actually executing
+  --what-if, -n         shows what would happen, without actually executing
                         changes to Google Drive
-  --version             show program's version number and exit
+  --version, -v         show program's version number and exit
+  --teamdrive teamdrive_id, -td teamdrive_id
+                        Team Drive ID (disable-links only).
 ```

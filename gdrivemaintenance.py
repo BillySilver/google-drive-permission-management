@@ -32,14 +32,21 @@ def argument_parsing():
                         help="should files/folders have their ownership changed")
     parser.add_argument("--disable-links", "-l", action="store_true", default=False,
                         help="Disable all sharing by links")
-    parser.add_argument("--what-if", action="store_true", default=False,
+    parser.add_argument("--what-if", "-n", action="store_true", default=False,
                         help="shows what would happen, without actually executing changes to Google Drive")
-    parser.add_argument("--version", action="version", version="%(prog)s {0}".format(version))
+    parser.add_argument("--version", "-v", action="version", version="%(prog)s {0}".format(version))
+    parser.add_argument("--teamdrive", "-td", metavar="teamdrive_id", type=str, default=None,
+                        help="Team Drive ID (disable-links only).")
 
     args = parser.parse_args()
 
     # Flatten collaborators and convert to set
     args.collaborators = set([item for sublist in args.collaborators for item in sublist])
+
+    if args.teamdrive is not None:
+        if len(args.collaborators) > 0 or args.take_ownership:
+            raise "It only supports disable-links on a team drive."
+
     return args
 
 
@@ -78,11 +85,18 @@ def modify_permissions(api_client, file_resource, collaborators, disable_links, 
                                          perm,
                                          what_if,
                                          batch if batch is not None else batch_internal)
+        elif api_client.is_teamdrive:
+            continue
         elif perm["emailAddress"] not in collaborators:
             api_client.delete_permission(file_resource,
                                          perm,
                                          what_if,
                                          batch if batch is not None else batch_internal)
+
+    if api_client.is_teamdrive:
+        if batch is None:
+            batch_internal.execute()
+        return
 
     # Add wanted permissions as specified by requested state
     wanted_collaborators = collaborators
@@ -107,7 +121,8 @@ def main():
 
     args = argument_parsing()
     try:
-        ops = GoogleDriveOperations(args.folder)
+        ops = GoogleDriveOperations(args.folder,
+                                    td_id=args.teamdrive)
     except FileNotFoundError:
         print("Folder '{0}' not found. Exiting...".format(args.folder), file=sys.stderr)
         sys.exit(1)
@@ -118,8 +133,16 @@ def main():
 
     # Call the Drive v3 API to get all files for processing
     print("Fixing owners and sharing permissions in files and folders...")
-    file_request = ops.service.files().list(pageSize=1000, q=ops.subfolder_filter,
-                                            fields="nextPageToken," + GoogleDriveOperations.STD_FIELDS_LIST)
+    if not ops.is_teamdrive:
+        file_request = ops.service.files().list(pageSize=1000, q=ops.subfolder_filter,
+                                                fields="nextPageToken," + GoogleDriveOperations.STD_FIELDS_LIST)
+    else:
+        file_request = ops.service.files().list(pageSize=1000, q=ops.subfolder_filter,
+                                                supportsAllDrives=True,
+                                                includeItemsFromAllDrives=True,
+                                                corpora="drive",
+                                                driveId=ops.td_id,
+                                                fields="nextPageToken," + GoogleDriveOperations.STD_FIELDS_LIST)
 
     # Batch all the permission changes, since they don't have dependencies
     perm_batch = EnhancedBatchHttpRequest(ops.service, callback=perm_edit_callback)
@@ -127,15 +150,18 @@ def main():
     for drive_obj in google_pager(file_request, "files", ops.service.files().list_next):
         # Fix ownership if desired, then fix permissions
         try:
-            if not ops.is_owner(drive_obj) and args.take_ownership:
+            if args.take_ownership and not ops.is_owner(drive_obj):
                 drive_obj = ops.take_ownership(drive_obj, args.what_if)
 
             if drive_obj is not None:   # None is possible when "What-If" is requested
 
                 # If the ownership changes are not requested, add the owner to the allowed collaborators list
-                aug_collaborators = set(args.collaborators)
-                if not args.take_ownership:
-                    aug_collaborators.add(ops.get_owner_email(drive_obj))
+                if not ops.is_teamdrive:
+                    aug_collaborators = set(args.collaborators)
+                    if not args.take_ownership:
+                        aug_collaborators.add(ops.get_owner_email(drive_obj))
+                else:
+                    aug_collaborators = set()
 
                 modify_permissions(ops,
                                    drive_obj,

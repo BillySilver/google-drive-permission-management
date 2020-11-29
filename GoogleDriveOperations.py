@@ -77,14 +77,15 @@ class EnhancedBatchHttpRequest(BatchHttpRequest):
 
 class GoogleDriveOperations(object):
     SCOPES = "https://www.googleapis.com/auth/drive"
-    ACCOUNT = "webots@eng.uwo.ca"
     STD_FIELDS = "name,id,parents,owners,kind,mimeType"
     _STD_FIELDS = "name,id,parents,owners,kind,mimeType"
     STD_FIELDS_LIST = "files({0})".format(STD_FIELDS)
     _STD_FIELDS_LIST = "files({0})".format(STD_FIELDS)
 
-    def __init__(self, folder):
+    def __init__(self, folder, td_id=None):
         self._service = self._setup()
+        self._td_id = td_id
+        self._is_teamdrive = (td_id is not None)
         temp_user_info = self._service.about().get(fields="user(emailAddress, permissionId)").execute().get("user")
         self._userinfo = namedtuple("UserInfo", temp_user_info.keys())(*temp_user_info.values())
         self._subfolder_ids, self._subfolder_filter = self.enumerate_subfolder_ids(folder)
@@ -94,6 +95,8 @@ class GoogleDriveOperations(object):
         self.subfolder_filter = self._subfolder_filter
         self.userinfo = self._userinfo
         self.service = self._service
+        self.td_id = td_id
+        self.is_teamdrive = self._is_teamdrive
 
     def _setup(self):
         """Handles initializing the Google Drive API authentication.
@@ -104,7 +107,7 @@ class GoogleDriveOperations(object):
         store = file.Storage("token.json")
         creds = store.get()
         if not creds or creds.invalid:
-            flow = client.flow_from_clientsecrets("client_id.json", self.SCOPES, login_hint=self.ACCOUNT)
+            flow = client.flow_from_clientsecrets("client_id.json", self.SCOPES)
             creds = tools.run_flow(flow, store)
         return build("drive", "v3", http=creds.authorize(Http()))
 
@@ -117,7 +120,8 @@ class GoogleDriveOperations(object):
         permissions = []
 
         perm_request = self._service.permissions().list(fileId=file_resource["id"],
-                                                        fields="permissions(id,emailAddress,role)")
+                                                        fields="permissions(id,emailAddress,role)",
+                                                        supportsAllDrives=self._is_teamdrive)
 
         for permission in google_pager(perm_request, "permissions", self._service.permissions().list_next):
             permissions.append(permission)
@@ -211,7 +215,8 @@ class GoogleDriveOperations(object):
         if what_if:
             return
 
-        command = self._service.permissions().delete(fileId=file_resource["id"], permissionId=perm["id"])
+        command = self._service.permissions().delete(fileId=file_resource["id"], permissionId=perm["id"],
+                                                     supportsAllDrives=self._is_teamdrive)
 
         if batch is None:
             command.execute()
@@ -312,11 +317,22 @@ class GoogleDriveOperations(object):
 
         # Find the ID of the top-level folder, and then collect all subfolder IDs
         try:
-            top_id = self._service.files().list(pageSize=1,
-                                                q="mimeType = 'application/vnd.google-apps.folder' "
-                                                  "and name = '{0}'".format(folder),
-                                                fields="nextPageToken," + self._STD_FIELDS_LIST)\
-                .execute()["files"][0]["id"]
+            if not self._is_teamdrive:
+                top_id = self._service.files().list(pageSize=1,
+                                                    q="mimeType = 'application/vnd.google-apps.folder' "
+                                                      "and name = '{0}'".format(folder),
+                                                    fields="nextPageToken," + self._STD_FIELDS_LIST)\
+                    .execute()["files"][0]["id"]
+            else:
+                top_id = self._service.files().list(pageSize=1,
+                                                    q="mimeType = 'application/vnd.google-apps.folder' "
+                                                      "and name = '{0}'".format(folder),
+                                                    supportsAllDrives=True,
+                                                    includeItemsFromAllDrives=True,
+                                                    corpora="drive",
+                                                    driveId=self._td_id,
+                                                    fields="nextPageToken," + self._STD_FIELDS_LIST)\
+                    .execute()["files"][0]["id"]
         except IndexError:
             # This could error out with bad name
             raise FileNotFoundError("Folder '{0}' was not found.".format(folder))
@@ -337,9 +353,18 @@ class GoogleDriveOperations(object):
         """
         subfolder_ids = set()
 
-        folder_request = self._service.files().list(pageSize=1000, q="mimeType = 'application/vnd.google-apps.folder'"
-                                                                     " and '{0}' in parents".format(top_folder_id),
-                                                    fields="nextPageToken,files(name,id,parents)")
+        if not self._is_teamdrive:
+            folder_request = self._service.files().list(pageSize=1000, q="mimeType = 'application/vnd.google-apps.folder'"
+                                                                         " and '{0}' in parents".format(top_folder_id),
+                                                        fields="nextPageToken,files(name,id,parents)")
+        else:
+            folder_request = self._service.files().list(pageSize=1000, q="mimeType = 'application/vnd.google-apps.folder'"
+                                                                         " and '{0}' in parents".format(top_folder_id),
+                                                        supportsAllDrives=True,
+                                                        includeItemsFromAllDrives=True,
+                                                        corpora="drive",
+                                                        driveId=self._td_id,
+                                                        fields="nextPageToken,files(name,id,parents)")
 
         for drive_folder in google_pager(folder_request, "files", self._service.files().list_next):
             subfolder_ids.update(self._collect_all_subfolders(drive_folder["id"]))
