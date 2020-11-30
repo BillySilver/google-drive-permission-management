@@ -39,7 +39,10 @@ def argument_parsing():
     parser.add_argument("--teamdrive", "-td", metavar="teamdrive_id", type=str, default=None,
                         help="Team Drive ID (disable-links only).")
     parser.add_argument("--files-only", action="store_true", default=False,
-                        help="Ignore any folders, only check and update permissions on files.")
+                        help="ignore any folders, only check and update permissions on files.")
+    parser.add_argument("--retry", metavar="log_filename", type=str,
+                        help="continue via a \"perm_edit_err.log\" file. you should rename it first"
+                             " since it might be overwritten.")
 
     args = parser.parse_args()
 
@@ -49,6 +52,9 @@ def argument_parsing():
     if args.teamdrive is not None:
         if len(args.collaborators) > 0 or args.take_ownership:
             raise "It only supports disable-links on a team drive."
+
+    if args.retry == "perm_edit_err.log":
+        raise "Filename of log \"perm_edit_err.log\" is not allowed. Please rename it first."
 
     return args
 
@@ -77,6 +83,52 @@ def perm_edit_callback(id, response, exception):
         print("Batch execution callback failed:", file=sys.stderr)
         print(exception, file=sys.stderr)
         perm_edit_err_logger(exception)
+
+
+def retry_from_log(api_client, perm_edit_err_log, what_if):
+    lines = []
+    with open(perm_edit_err_log, "r") as f:
+        for line in f:
+            lines.append(line)
+
+    # Batch all the permission changes, since they don't have dependencies
+    batch = EnhancedBatchHttpRequest(api_client.service, callback=perm_edit_callback)
+
+    n_cmd_batch = 100
+    for cnt in range(len(lines)):
+        if cnt % n_cmd_batch == 0:
+            # Show progress.
+            print("** %d-%d of %d commands **" % (cnt+1, min(cnt+n_cmd_batch, len(lines)), len(lines)))
+
+        line = lines[cnt].split()
+        cmd, fileId = line[ :2]
+        if cmd == "add":
+            raise "retrying for add permissions is currently not supported."
+            # command = api_client.service.permissions().create(fileId=fileId,
+            #                                                   body={'emailAddress': email, 'role': role.value})
+        elif cmd == "del":
+            permissionId = line[2]
+
+            # Setup action message
+            if permissionId == "anyoneWithLink":
+                msg = "{1}Disabling link for fileId: '{0}'".format(fileId, "What-If: " if what_if else "")
+            else:
+                # An organization has its own permissionId, that is, it is regarded as a regular user.
+                msg = "{2}Deleting access to fileId: '{0}' for permissionId: '{1}'.".format(
+                    fileId, permissionId, "What-If: " if what_if else "")
+            print(msg)
+
+            # Stop here if what-if is requested
+            if what_if:
+                continue
+
+            command = api_client.service.permissions().delete(fileId=fileId, permissionId=permissionId,
+                                                              supportsAllDrives=api_client.is_teamdrive)
+            batch.add(command)
+        else:
+            raise "perm_edit_err_log error: unknown format."
+
+    batch.execute()
 
 
 def td_disable_links(api_client, file_resource, what_if, permissions=None, batch=None):
@@ -155,10 +207,14 @@ def main():
     args = argument_parsing()
     try:
         ops = GoogleDriveOperations(args.folder,
-                                    td_id=args.teamdrive)
+                                    td_id=args.teamdrive,
+                                    retry=args.retry is not None)
     except FileNotFoundError:
         print("Folder '{0}' not found. Exiting...".format(args.folder), file=sys.stderr)
         sys.exit(1)
+
+    if args.retry is not None:
+        return retry_from_log(ops, args.retry, args.what_if)
 
     # Add current user to collaborators if not present
     if ops.userinfo.emailAddress not in args.collaborators:
@@ -175,12 +231,14 @@ def main():
     for i in range(0, len(subfolder_ids), n_folder_batch):
         # Send a request for every 'n_folder_batch' folders.
         subfolder_ids_batch = subfolder_ids[i:i+n_folder_batch]
-        print("** %d-%d of %d folders **" % (i+1, i+len(subfolder_ids_batch), len(subfolder_ids)))
         subfolder_filter = "mimeType != 'application/vnd.google-apps.folder' and " if args.files_only else ""
         if len(subfolder_ids) > 1:
             subfolder_filter += "('" + "' in parents or '".join(subfolder_ids_batch) + "' in parents)"
         else:
             subfolder_filter = "('%s' in parents)" % subfolder_ids_batch[0]
+
+        # Show progress.
+        print("** %d-%d of %d folders **" % (i+1, i+len(subfolder_ids_batch), len(subfolder_ids)))
 
         if not ops.is_teamdrive:
             file_request = ops.service.files().list(pageSize=1000, q=subfolder_filter,

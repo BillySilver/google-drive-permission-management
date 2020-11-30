@@ -82,10 +82,16 @@ class GoogleDriveOperations(object):
     STD_FIELDS_LIST = "files({0})".format(STD_FIELDS)
     _STD_FIELDS_LIST = "files({0})".format(STD_FIELDS)
 
-    def __init__(self, folder, td_id=None):
+    def __init__(self, folder, td_id=None, retry=False):
         self._service = self._setup()
         self._td_id = td_id
         self._is_teamdrive = (td_id is not None)
+        # Setup publicly-available variables (early setup for retry).
+        self.service = self._service
+        self.td_id = td_id
+        self.is_teamdrive = self._is_teamdrive
+        if retry is True:
+            return
         temp_user_info = self._service.about().get(fields="user(emailAddress, permissionId)").execute().get("user")
         self._userinfo = namedtuple("UserInfo", temp_user_info.keys())(*temp_user_info.values())
         self._subfolder_ids = self.enumerate_subfolder_ids(folder)
@@ -93,9 +99,6 @@ class GoogleDriveOperations(object):
         # Setup publicly-available variables
         self.subfolder_ids = self._subfolder_ids
         self.userinfo = self._userinfo
-        self.service = self._service
-        self.td_id = td_id
-        self.is_teamdrive = self._is_teamdrive
 
     def _setup(self):
         """Handles initializing the Google Drive API authentication.

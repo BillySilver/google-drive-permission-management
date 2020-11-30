@@ -37,7 +37,7 @@ python gdrivemaintenance.py "WE Bots" -c webots@eng.uwo.ca -t
 usage: gdrivemaintenance.py [-h] [--collaborators email [email ...]]
                             [--take-ownership] [--disable-links] [--what-if]
                             [--version] [--teamdrive teamdrive_id]
-                            [--files-only]
+                            [--files-only] [--retry log_filename]
                             [folder]
 
 Update sharing and ownership permissions on Google Drive files/folders to
@@ -59,6 +59,8 @@ optional arguments:
   --version, -v         show program's version number and exit
   --teamdrive teamdrive_id, -td teamdrive_id
                         Team Drive ID (disable-links only).
-  --files-only          Ignore any folders, only check and update
+  --files-only          ignore any folders, only check and update
                         permissions on files.
+  --retry log_filename  continue via a "perm_edit_err.log" file. you should
+                        rename it first since it might be overwritten.
 ```
