@@ -67,22 +67,33 @@ class EnhancedBatchHttpRequest(BatchHttpRequest):
         self._counter = 0
         self._kwargs = kwargs
 
+        # Hidden batch for modtime.
+        self._modtime_batch = BatchHttpRequest(**kwargs)
+
     def add(self, *args, **kwargs):
         super(EnhancedBatchHttpRequest, self).add(*args, **kwargs)
         self._counter += 1
 
         if self._counter >= self.CAP:
             self.execute()
-            self.clear()
 
     def clear(self):
         super(EnhancedBatchHttpRequest, self).__init__(**self._kwargs)
         self._counter = 0
+        self._modtime_batch.__init__(**self._kwargs)
+
+    def execute(self, *args, **kwargs):
+        super(EnhancedBatchHttpRequest, self).execute(*args, **kwargs)
+        self._modtime_batch.execute(*args, **kwargs)
+        self.clear()
+
+    def add_modtime(self, *args, **kwargs):
+        self._modtime_batch.add(*args, **kwargs)
 
 class GoogleDriveOperations(object):
     SCOPES = "https://www.googleapis.com/auth/drive"
-    STD_FIELDS = "name,id,parents,owners,kind,mimeType"
-    _STD_FIELDS = "name,id,parents,owners,kind,mimeType"
+    STD_FIELDS = "name,id,parents,owners,modifiedTime,kind,mimeType"
+    _STD_FIELDS = "name,id,parents,owners,modifiedTime,kind,mimeType"
     STD_FIELDS_LIST = "files({0})".format(STD_FIELDS)
     _STD_FIELDS_LIST = "files({0})".format(STD_FIELDS)
 
@@ -166,11 +177,12 @@ class GoogleDriveOperations(object):
                 return True
         return False
 
-    def add_permission(self, file_resource, email, what_if, role=CollaboratorType.WRITER, batch=None):
+    def add_permission(self, file_resource, email, keep_modtime, what_if, role=CollaboratorType.WRITER, batch=None):
         """Given a file and and a collaborator email, adds them.
 
         :param file_resource: The file containing the permission
         :param email: The email of the collaborator to add
+        :param keep_modtime: Should the modified time of the file be reserved?
         :param what_if: If the function shouldn't actually run and instead print out what it was going to do.
         :param role: The permission that the collaborator will be allowed to take. Defaults to Writer.
         :param batch: Object to add the addition to. Otherwise execute addition immediately.
@@ -196,11 +208,15 @@ class GoogleDriveOperations(object):
         else:
             batch.add(command)
 
-    def delete_permission(self, file_resource, perm, what_if, batch=None):
+        if keep_modtime:
+            self._restore_modtime(file_resource["id"], file_resource["modifiedTime"], batch)
+
+    def delete_permission(self, file_resource, perm, keep_modtime, what_if, batch=None):
         """Given a file and and a permission, deletes it.
 
         :param file_resource: The file containing the permission
         :param perm: The permission to delete
+        :param keep_modtime: Should the modified time of the file be reserved?
         :param what_if: If the function shouldn't actually run and instead print out what it was going to do.
         :param batch: Object to add the deletion to. Otherwise execute deletion immediately.
         :return: None
@@ -228,6 +244,19 @@ class GoogleDriveOperations(object):
             command.execute()
         else:
             batch.add(command)
+
+        if keep_modtime:
+            self._restore_modtime(file_resource["id"], file_resource["modifiedTime"], batch)
+
+    def _restore_modtime(self, fileId, modifiedTime, batch=None):
+        command = self._service.files().update(fileId=fileId,
+                                               supportsAllDrives=self._is_teamdrive,
+                                               body={"modifiedTime": modifiedTime})
+
+        if batch is None:
+            command.execute()
+        else:
+            batch.add_modtime(command)
 
     @staticmethod
     def _default_batch_callback(rid, resp, err):

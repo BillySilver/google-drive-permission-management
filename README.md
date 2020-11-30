@@ -38,6 +38,7 @@ usage: gdrivemaintenance.py [-h] [--collaborators email [email ...]]
                             [--take-ownership] [--disable-links] [--what-if]
                             [--version] [--teamdrive teamdrive_id]
                             [--files-only] [--retry log_filename]
+                            [--keep-modtime]
                             [folder]
 
 Update sharing and ownership permissions on Google Drive files/folders to
@@ -63,4 +64,5 @@ optional arguments:
                         permissions on files.
   --retry log_filename  continue via a "perm_edit_err.log" file. you should
                         rename it first since it might be overwritten.
+  --keep-modtime        keep modified time. it's useful for sync tools.
 ```

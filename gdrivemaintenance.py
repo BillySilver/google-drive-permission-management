@@ -43,6 +43,8 @@ def argument_parsing():
     parser.add_argument("--retry", metavar="log_filename", type=str,
                         help="continue via a \"perm_edit_err.log\" file. you should rename it first"
                              " since it might be overwritten.")
+    parser.add_argument("--keep-modtime", action="store_true", default=False,
+                        help="keep modified time. it's useful for sync tools.")
 
     args = parser.parse_args()
 
@@ -66,6 +68,9 @@ def perm_edit_err_logger(exception):
         return
 
     m = re.search(perm_edit_err_logger.re_uri_perm, exception.uri)
+    if m is None:
+        return
+
     fileId = m.group(1)
     permissionId = m.group(2)
     with open("perm_edit_err.log", "a") as f:
@@ -85,7 +90,7 @@ def perm_edit_callback(id, response, exception):
         perm_edit_err_logger(exception)
 
 
-def retry_from_log(api_client, perm_edit_err_log, what_if):
+def retry_from_log(api_client, perm_edit_err_log, keep_modtime, what_if):
     lines = []
     with open(perm_edit_err_log, "r") as f:
         for line in f:
@@ -131,24 +136,27 @@ def retry_from_log(api_client, perm_edit_err_log, what_if):
     batch.execute()
 
 
-def td_disable_links(api_client, file_resource, what_if, permissions=None, batch=None):
+def td_disable_links(api_client, file_resource, keep_modtime, what_if, permissions=None, batch=None):
     if permissions is None:
         permissions = api_client.get_permissions(file_resource)
     for perm in permissions:
         if perm["type"] in ["anyone", "domain"]:
             api_client.delete_permission(file_resource,
                                          perm,
+                                         keep_modtime,
                                          what_if,
                                          batch)
 
 
-def modify_permissions(api_client, file_resource, collaborators, disable_links, what_if, permissions=None, batch=None):
+def modify_permissions(api_client, file_resource, collaborators, disable_links, keep_modtime, what_if,
+                       permissions=None, batch=None):
     """Edits permissions on a file owned by the executor to match the 'collaborators' preference.
 
     :param api_client: The Google API object wrapper to interact with
     :param file_resource: The file to modify permissions for.
     :param collaborators: Collaborators allowed on the file.
     :param disable_links: Should a shared link be disabled?
+    :param keep_modtime: Should the modified time of the file be reserved?
     :param what_if: Should permission modification happen, or just print what would happen?
     :param permissions: The file's permissions. Will be retrieved fresh if blank.
     :param batch: Object to use for batching permission edits, if provided.
@@ -158,7 +166,7 @@ def modify_permissions(api_client, file_resource, collaborators, disable_links, 
         # Check that link disabling is requested
         if not disable_links:
             return
-        return td_disable_links(api_client, file_resource, what_if, permissions, batch)
+        return td_disable_links(api_client, file_resource, keep_modtime, what_if, permissions, batch)
 
     batch_internal = api_client.service.new_batch_http_request(perm_edit_callback)  # Batch at the file level or higher
 
@@ -171,15 +179,17 @@ def modify_permissions(api_client, file_resource, collaborators, disable_links, 
         if perm["type"] in ["anyone", "domain"]:
             # Check that link disabling is requested
             if not disable_links:
-                return
+                continue
 
             api_client.delete_permission(file_resource,
                                          perm,
+                                         keep_modtime,
                                          what_if,
                                          batch if batch is not None else batch_internal)
         elif perm["emailAddress"] not in collaborators:
             api_client.delete_permission(file_resource,
                                          perm,
+                                         keep_modtime,
                                          what_if,
                                          batch if batch is not None else batch_internal)
 
@@ -191,6 +201,7 @@ def modify_permissions(api_client, file_resource, collaborators, disable_links, 
     for collab_email in missing_collaborators:
         api_client.add_permission(file_resource,
                                   collab_email,
+                                  keep_modtime,
                                   what_if,
                                   batch=batch if batch is not None else batch_internal)
 
@@ -214,7 +225,7 @@ def main():
         sys.exit(1)
 
     if args.retry is not None:
-        return retry_from_log(ops, args.retry, args.what_if)
+        return retry_from_log(ops, args.retry, args.keep_modtime, args.what_if)
 
     # Add current user to collaborators if not present
     if ops.userinfo.emailAddress not in args.collaborators:
@@ -271,6 +282,7 @@ def main():
                                        drive_obj,
                                        aug_collaborators,
                                        args.disable_links,
+                                       args.keep_modtime,
                                        args.what_if,
                                        batch=perm_batch)
             except googleapiclient.errors.HttpError as err:
