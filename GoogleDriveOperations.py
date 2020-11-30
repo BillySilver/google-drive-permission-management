@@ -58,13 +58,14 @@ class CollaboratorType(Enum):
 
 class EnhancedBatchHttpRequest(BatchHttpRequest):
     """Google batch request object that automatically calls execute on itself when too many calls are batched."""
-    CAP = 500
+    CAP = 100
 
     def __init__(self, service, **kwargs):
         if "batch_uri" not in kwargs:
             kwargs["batch_uri"] = service.new_batch_http_request()._batch_uri
         super(EnhancedBatchHttpRequest, self).__init__(**kwargs)
         self._counter = 0
+        self._kwargs = kwargs
 
     def add(self, *args, **kwargs):
         super(EnhancedBatchHttpRequest, self).add(*args, **kwargs)
@@ -72,8 +73,11 @@ class EnhancedBatchHttpRequest(BatchHttpRequest):
 
         if self._counter >= self.CAP:
             self.execute()
-            self._counter = 0
+            self.clear()
 
+    def clear(self):
+        super(EnhancedBatchHttpRequest, self).__init__(**self._kwargs)
+        self._counter = 0
 
 class GoogleDriveOperations(object):
     SCOPES = "https://www.googleapis.com/auth/drive"
